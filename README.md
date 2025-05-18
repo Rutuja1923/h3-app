@@ -20,7 +20,7 @@ H3 is a lightweight and modern web framework for building HTTP servers in Node.j
 
 ```bash
 git clone https://github.com/Rutuja1923/h3-app.git
-cd h3-playground
+cd h3-app
 ```
 
 ### 2. Install dependencies
