@@ -10,6 +10,8 @@ import {
   toNodeListener,
   fromWebHandler,
   getHeader,
+  getRequestHeader,
+  readBody,
 } from "h3";
 import type { IncomingMessage, ServerResponse } from "http";
 import { createServer } from "node:http";
@@ -65,6 +67,15 @@ app.use(
   "/greet",
   defineEventHandler(() => {
     return "Welcome to h3 playground";
+  })
+);
+
+//user middleware to set context
+app.use(
+  defineEventHandler((event) => {
+    if (event.path.startsWith("/user")) {
+      event.context.user = { id: 123, name: "John" };
+    }
   })
 );
 
@@ -355,5 +366,108 @@ router.get(
 
     const data = await response.json();
     return { status: response.status, data };
+  })
+);
+
+router.get(
+  "/request-info",
+  defineEventHandler((event) => {
+    //log event info
+    console.log(`Request: ${event.toString()}`);
+
+    //access event properties
+    return {
+      path: event.path,
+      method: event.method,
+      headers: Object.fromEntries(event.headers),
+      query: getQuery(event),
+    };
+  })
+);
+
+router.get(
+  "/node-native",
+  defineEventHandler((event) => {
+    //access node.js native request/response
+    const nodeReq = event.node.req;
+    const nodeRes = event.node.res;
+
+    //example: Set custom header
+    nodeRes.setHeader("X-Custom-Header", "Hello from Node");
+
+    return {
+      url: nodeReq.url,
+      httpVersion: nodeReq.httpVersion,
+    };
+  })
+);
+
+router.get(
+  "/user/profile",
+  defineEventHandler((event) => {
+    //access context set by middleware
+    return `Hello ${event.context.user.name}! Your id is ${event.context.user.id}`;
+  })
+);
+
+router.get(
+  "/respond-with",
+  defineEventHandler((event) => {
+    //using respondWith
+    event.respondWith(
+      new Response("Early response", {
+        status: 202,
+        headers: { "X-Early-Response": "true" },
+      })
+    );
+
+    //this won't be sent to client
+    return "This will be ignored";
+  })
+);
+
+router.get(
+  "/normal-response",
+  defineEventHandler((event) => {
+    //normal return - it is recommended and preferred
+    return {
+      message: "This works normally",
+      timestamp: new Date(),
+    };
+  })
+);
+
+router.post(
+  "/echo",
+  defineEventHandler(async (event) => {
+    const body = await readBody(event);
+    const contentType = getHeader(event, "content-type");
+
+    return {
+      receivedAt: new Date(),
+      contentType,
+      body,
+      yourIp:
+        getRequestHeader(event, "x-forwarded-for") ||
+        event.node.req.socket.remoteAddress,
+    };
+  })
+);
+
+router.get(
+  "/sub/*",
+  defineEventHandler((event) => {
+    return `From Sub: Hello ${
+      (event.context.params && event.context.params._) || "guest"
+    }!`;
+  })
+);
+
+router.get(
+  "/multi/**",
+  defineEventHandler((event) => {
+    return `From multi: Hello ${
+      (event.context.params && event.context.params._) || "guest"
+    }!`;
   })
 );
