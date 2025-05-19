@@ -7,7 +7,12 @@ import {
   getQuery,
   getRouterParam,
   defineLazyEventHandler,
+  toNodeListener,
+  fromWebHandler,
+  getHeader,
 } from "h3";
+import type { IncomingMessage, ServerResponse } from "http";
+import { createServer } from "node:http";
 
 // Create an app instance
 export const app = createApp({
@@ -36,12 +41,51 @@ app.use(
   })
 );
 
+// Middleware that adds start time
+app.use(
+  "/timed",
+  defineEventHandler((event) => {
+    event.context.startTime = Date.now();
+    console.log("Start time set:", event.context.startTime);
+  })
+);
+
+// Main handler
+app.use(
+  "/timed",
+  defineEventHandler((event) => {
+    return {
+      processingTime: Date.now() - event.context.startTime,
+      message: "Timed response",
+    };
+  })
+);
+
 app.use(
   "/greet",
   defineEventHandler(() => {
     return "Welcome to h3 playground";
   })
 );
+
+// the node handler part doesn't work as exprected
+// Convert Node.js style handler (with proper types)
+const nodeStyleHandler = (req: IncomingMessage, res: ServerResponse) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Hello from Node.js handler");
+};
+// Create server (separate from H3 app)
+const server = createServer(toNodeListener(app));
+server.on("request", nodeStyleHandler);
+
+// Convert Web/Fetch style handler
+const webStyleHandler = async (request: globalThis.Request) => {
+  return new Response("Hello from Fetch handler", {
+    headers: { "Content-Type": "text/plain" },
+    status: 200,
+  });
+};
+app.use("/fetch-route", fromWebHandler(webStyleHandler));
 
 // Create a new router and register it in app
 const router = createRouter();
@@ -150,5 +194,166 @@ router.get(
       message: "Invalid user input",
       data: { field: "email" },
     });
+  })
+);
+
+router.get(
+  "/object-handler",
+  defineEventHandler({
+    onRequest: [
+      (event) => {
+        console.log("Request started:", event.path);
+      },
+    ],
+    onBeforeResponse: [
+      (event) => {
+        console.log("About to send response");
+      },
+    ],
+    handler: (event) => {
+      return {
+        message: "Response from object syntax handler",
+        timestamp: new Date(),
+      };
+    },
+  })
+);
+
+router.get(
+  "/html",
+  defineEventHandler(() => "<h1>Hello HTML!</h1>")
+);
+
+router.get(
+  "/json",
+  defineEventHandler(() => ({
+    status: "ok",
+    data: [1, 2, 3],
+  }))
+);
+
+router.get(
+  "/stream",
+  defineEventHandler(() => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue("Streaming ");
+        controller.enqueue("data ");
+        controller.close();
+      },
+    });
+    return stream;
+  })
+);
+
+router.get(
+  "/error",
+  defineEventHandler(() => {
+    throw createError({
+      statusCode: 500,
+      statusMessage: "Internal Error",
+      message: "Something went wrong on our end.",
+      fatal: true,
+    });
+  })
+);
+
+router.get(
+  "/lazy-heavy",
+  defineLazyEventHandler(() => {
+    console.log("Initializing heavy resource...");
+    const heavyResource = initializeHeavyResource();
+    return defineEventHandler(() => ({
+      data: heavyResource.process(),
+      loadedAt: new Date(),
+    }));
+  })
+);
+
+function initializeHeavyResource() {
+  console.log("Heavy resource initialized");
+  return {
+    process: () => "This is heavy data from the resource",
+  };
+}
+
+router.get(
+  "/item/:id",
+  defineEventHandler((event) => {
+    const id = getRouterParam(event, "id");
+    return {
+      id,
+      name: `Item ${id}`,
+      details: `Details for item ${id}`,
+    };
+  })
+);
+
+//dummy authorization
+//simulated client "session" token store
+let clientAuthToken = "";
+
+router.get(
+  "/auth/set-token",
+  defineEventHandler((event) => {
+    clientAuthToken = "Bearer valid-token";
+    return { message: "Auth token set!", token: clientAuthToken };
+  })
+);
+
+router.get(
+  "/auth/clear-token",
+  defineEventHandler((event) => {
+    clientAuthToken = "";
+    return { message: "Auth token cleared." };
+  })
+);
+
+router.get(
+  "/secure",
+  defineEventHandler(async (event) => {
+    const authToken = getHeader(event, "Authorization");
+    if (!authToken) {
+      throw createError({
+        statusCode: 401,
+        statusMessage: "Unauthorized",
+      });
+    }
+
+    try {
+      event.context.user = await verifyToken(authToken); // Simulate this
+    } catch (error) {
+      throw createError({
+        statusCode: 403,
+        statusMessage: "Forbidden",
+        message: "Invalid token",
+      });
+    }
+
+    return { message: "Access granted", user: event.context.user };
+  })
+);
+
+function verifyToken(token: string) {
+  return new Promise((resolve, reject) => {
+    if (token === "Bearer valid-token") {
+      resolve({ userId: 123, name: "Alice" });
+    } else {
+      reject(new Error("Invalid token"));
+    }
+  });
+}
+
+router.get(
+  "/auth/test-secure",
+  defineEventHandler(async () => {
+    const response = await fetch("http://localhost:3000/secure", {
+      headers: {
+        Authorization: clientAuthToken,
+      },
+    });
+
+    const data = await response.json();
+    return { status: response.status, data };
   })
 );
